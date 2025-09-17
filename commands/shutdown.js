@@ -1,3 +1,17 @@
+const { SlashCommandBuilder } = require("discord.js");
+
+module.exports = {
+  name: "ping", // for message commands
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
+  async execute(interactionOrMessage) {
+    if (interactionOrMessage.reply) {
+      await interactionOrMessage.reply("🏓 Pong!");
+    }
+  }
+};
+
 module.exports = {
   name: "shutdown",
   description: "Shut down bot (Owner only)",
@@ -13,3 +27,4 @@ module.exports = {
     process.exit();
   }
 };
+
