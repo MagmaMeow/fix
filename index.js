@@ -1,6 +1,6 @@
 // Load env vars
 require("dotenv").config();
-const { Client, GatewayIntentBits, Partials } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require("discord.js");
 const express = require("express");
 
 // ------------------ Express Server (for Render) ------------------
@@ -45,14 +45,39 @@ async function ensureGuildCategory(hub, guild, removed = false) {
 
     const subs = ["owner", "ban", "warn", "kick", "clear", "everything-else"];
     for (const sub of subs) {
-      await hub.channels.create({
+      const chan = await hub.channels.create({
         name: sub,
         type: 0,
         parent: category.id
       });
+
+      // Starter messages
+      if (sub === "ban") chan.send("🔨 Ban logs will appear here.");
+      if (sub === "warn") chan.send("⚠️ Warn logs will appear here.");
+      if (sub === "kick") chan.send("👢 Kick logs will appear here.");
+      if (sub === "clear") chan.send("🧹 Message clear logs will appear here.");
+      if (sub === "everything-else") chan.send("📜 General logs will appear here.");
     }
   }
   return category;
+}
+
+async function updateOwnerInfo(hub, guild) {
+  const category = await ensureGuildCategory(hub, guild);
+  const ownerChan = hub.channels.cache.find(
+    (c) => c.parentId === category.id && c.name === "owner"
+  );
+  if (ownerChan) {
+    try {
+      const owner = await guild.fetchOwner();
+      // Clear previous messages for a clean single entry
+      const msgs = await ownerChan.messages.fetch({ limit: 10 });
+      if (msgs.size > 0) await ownerChan.bulkDelete(msgs, true);
+      ownerChan.send(`👑 Server Owner: **${owner.user.tag}** (\`${owner.id}\`)`);
+    } catch {
+      ownerChan.send(`⚠️ Could not fetch server owner for **${guild.name}**`);
+    }
+  }
 }
 
 async function logToHub(guild, sub, msg, removed = false) {
@@ -76,14 +101,21 @@ client.once("ready", async () => {
     return;
   }
 
+  // Ensure skeleton + refresh owner info for all guilds
   for (const [, guild] of client.guilds.cache) {
     if (guild.id === HUB_SERVER_ID) continue;
     await ensureGuildCategory(hub, guild);
+    await updateOwnerInfo(hub, guild);
   }
 });
 
 client.on("guildCreate", async (guild) => {
+  const hub = client.guilds.cache.get(HUB_SERVER_ID);
+  if (!hub) return;
+
+  await ensureGuildCategory(hub, guild);
   await logToHub(guild, "everything-else", `✅ Joined guild: **${guild.name}** (\`${guild.id}\`)`);
+  await updateOwnerInfo(hub, guild);
 });
 
 client.on("guildDelete", async (guild) => {
@@ -126,7 +158,7 @@ client.on("messageCreate", async (message) => {
 
   // kick
   if (command === "kick") {
-    if (!message.member.permissions.has("KickMembers")) return;
+    if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return;
     const member = message.mentions.members.first();
     if (!member) return message.reply("❌ Mention someone to kick.");
     try {
@@ -140,7 +172,7 @@ client.on("messageCreate", async (message) => {
 
   // ban
   if (command === "ban") {
-    if (!message.member.permissions.has("BanMembers")) return;
+    if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
     const member = message.mentions.members.first();
     if (!member) return message.reply("❌ Mention someone to ban.");
     try {
@@ -154,7 +186,7 @@ client.on("messageCreate", async (message) => {
 
   // clear
   if (command === "clear") {
-    if (!message.member.permissions.has("ManageMessages")) return;
+    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) return;
     const amount = parseInt(args[0]) || 5;
     const msgs = await message.channel.bulkDelete(amount, true);
     await logToHub(
