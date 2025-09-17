@@ -1,3 +1,17 @@
+const { SlashCommandBuilder } = require("discord.js");
+
+module.exports = {
+  name: "ping", // for message commands
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
+  async execute(interactionOrMessage) {
+    if (interactionOrMessage.reply) {
+      await interactionOrMessage.reply("🏓 Pong!");
+    }
+  }
+};
+
 const { load, save } = require("../utils/storage");
 let warns = load("warns.json");
 
@@ -43,3 +57,4 @@ module.exports = {
     interaction.reply(`⚠️ Warned ${user.tag} | Reason: ${reason}`);
   }
 };
+
