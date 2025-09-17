@@ -1,3 +1,17 @@
+const { SlashCommandBuilder } = require("discord.js");
+
+module.exports = {
+  name: "ping", // for message commands
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
+  async execute(interactionOrMessage) {
+    if (interactionOrMessage.reply) {
+      await interactionOrMessage.reply("🏓 Pong!");
+    }
+  }
+};
+
 module.exports = {
   name: "kick",
   description: "Kick a user (Admin only)",
@@ -21,3 +35,4 @@ module.exports = {
     interaction.reply(`👢 Kicked ${user.tag}`);
   }
 };
+
