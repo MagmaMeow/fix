@@ -1,4 +1,18 @@
 const { EmbedBuilder } = require("discord.js");
+const { SlashCommandBuilder } = require("discord.js");
+
+module.exports = {
+  name: "ping", // for message commands
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
+  async execute(interactionOrMessage) {
+    if (interactionOrMessage.reply) {
+      await interactionOrMessage.reply("🏓 Pong!");
+    }
+  }
+};
+
 
 module.exports = {
   name: "avatar",
@@ -22,3 +36,4 @@ module.exports = {
     interaction.reply({ embeds: [embed] });
   }
 };
+
