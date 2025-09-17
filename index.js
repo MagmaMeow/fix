@@ -1,81 +1,130 @@
-const { Client, Collection, GatewayIntentBits, Partials } = require("discord.js");
-const fs = require("fs");
-const path = require("path");
-const { prefixes, hubGuildId, logChannelId } = require("./config");
 require("dotenv").config();
+const fs = require("fs");
+const { Client, GatewayIntentBits, Collection } = require("discord.js");
+const { hubGuildId } = require("./config");
+const { addLog } = require("./utils/logger");
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildVoiceStates,
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
 client.commands = new Collection();
 
-// Load commands
-const commandFiles = fs.readdirSync(path.join(__dirname, "commands")).filter(f => f.endsWith(".js"));
-for (const file of commandFiles) {
-  const command = require(`./commands/${file}`);
-  client.commands.set(command.name, command);
+// Load all commands
+fs.readdirSync("./commands").forEach((file) => {
+  const cmd = require(`./commands/${file}`);
+  client.commands.set(cmd.name, cmd);
+});
+
+// Setup hub category + channels
+async function setupHubCategory(guild) {
+  const hub = client.guilds.cache.get(hubGuildId);
+  if (!hub) return;
+
+  let category = hub.channels.cache.find(
+    (c) => c.type === 4 && c.name === guild.name
+  );
+
+  if (!category) {
+    category = await hub.channels.create({
+      name: guild.name,
+      type: 4,
+    });
+
+    const channels = ["owner", "ban", "warn", "kick", "clear", "everything-else"];
+    for (const ch of channels) {
+      await hub.channels.create({
+        name: ch,
+        type: 0,
+        parent: category.id,
+      });
+    }
+  }
+  return category;
 }
 
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+async function logAction(guild, type, message) {
+  addLog(type, guild.id, { text: message });
+
+  const hub = client.guilds.cache.get(hubGuildId);
+  if (!hub) return;
+
+  const category = hub.channels.cache.find(
+    (c) => c.type === 4 && c.name === guild.name
+  );
+  if (!category) return;
+
+  const logChannel = hub.channels.cache.find(
+    (c) => c.parentId === category.id && c.name === type
+  ) || hub.channels.cache.find(
+    (c) => c.parentId === category.id && c.name === "everything-else"
+  );
+
+  if (logChannel) logChannel.send(message);
+}
+
+// Bot joins a guild
+client.on("guildCreate", async (guild) => {
+  await setupHubCategory(guild);
+  await logAction(guild, "everything-else", `✅ Joined guild: **${guild.name}** (\`${guild.id}\`)`);
 });
 
-// Message commands (prefix)
-client.on("messageCreate", async (message) => {
-  if (message.author.bot || !message.guild) return;
-  const prefix = prefixes.find(p => message.content.startsWith(p));
+// Bot leaves a guild
+client.on("guildDelete", async (guild) => {
+  const hub = client.guilds.cache.get(hubGuildId);
+  if (!hub) return;
+
+  const category = hub.channels.cache.find(
+    (c) => c.type === 4 && c.name === guild.name
+  );
+  if (category) {
+    await category.setName(`(Removed)${guild.name}`);
+    const logChannel = hub.channels.cache.find(
+      (c) => c.parentId === category.id && c.name === "everything-else"
+    );
+    if (logChannel) {
+      logChannel.send(`❌ Bot removed from **${guild.name}** (\`${guild.id}\`)`);
+    }
+  }
+
+  addLog("leave", guild.id, { name: guild.name });
+});
+
+// Message commands
+client.on("messageCreate", async (msg) => {
+  if (msg.author.bot) return;
+  const prefix = msg.content.startsWith("?") ? "?" : msg.content.startsWith("!") ? "!" : null;
   if (!prefix) return;
 
-  const args = message.content.slice(prefix.length).trim().split(/ +/);
-  const cmdName = args.shift().toLowerCase();
-  const command = client.commands.get(cmdName);
+  const args = msg.content.slice(prefix.length).trim().split(/ +/);
+  const commandName = args.shift().toLowerCase();
+
+  const command = client.commands.get(commandName);
   if (!command) return;
 
   try {
-    await command.execute({ message, args, client });
+    const result = await command.execute(client, msg, args);
+
+    // If command returns { type, text }, log it
+    if (result && result.type && result.text) {
+      await logAction(msg.guild, result.type, result.text);
+    }
   } catch (err) {
     console.error(err);
-    message.reply("⚠️ Error running command.");
+    msg.reply("❌ Error running command.");
   }
 });
 
-// Slash commands
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  const command = client.commands.get(interaction.commandName);
-  if (!command) return;
-
-  try {
-    await command.executeSlash({ interaction, client });
-  } catch (err) {
-    console.error(err);
-    interaction.reply({ content: "⚠️ Error running command.", ephemeral: true });
-  }
-});
-
-// Guild join/leave logs
-const { addLog } = require("./utils/logger");
-client.on("guildCreate", (guild) => {
-  addLog("join", guild.id, { name: guild.name });
-  const hub = client.guilds.cache.get(hubGuildId);
-  if (hub) {
-    hub.channels.cache.get(logChannelId)?.send(`✅ Joined guild: **${guild.name}** (\`${guild.id}\`)`);
-  }
-});
-
-client.on("guildDelete", (guild) => {
-  addLog("leave", guild.id, { name: guild.name });
-  const hub = client.guilds.cache.get(hubGuildId);
-  if (hub) {
-    hub.channels.cache.get(logChannelId)?.send(`❌ Left guild: **${guild.name}** (\`${guild.id}\`)`);
-  }
+// Ready
+client.once("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+  client.guilds.cache.forEach((guild) => setupHubCategory(guild));
 });
 
 client.login(process.env.TOKEN);
