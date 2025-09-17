@@ -1,3 +1,18 @@
+const { SlashCommandBuilder } = require("discord.js");
+
+module.exports = {
+  name: "ping", // for message commands
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
+  async execute(interactionOrMessage) {
+    if (interactionOrMessage.reply) {
+      await interactionOrMessage.reply("🏓 Pong!");
+    }
+  }
+};
+
+
 module.exports = {
   name: "say",
   description: "Make the bot say something",
@@ -16,3 +31,4 @@ module.exports = {
     interaction.reply(text);
   }
 };
+
