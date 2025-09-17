@@ -4,7 +4,7 @@
   "description": "All-in-one Discord bot skeleton (AI stub + music stub + logging + owner tools)",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node deploy-commands.js && node index.js"
   },
   "dependencies": {
     "discord.js": "^14.15.3",
