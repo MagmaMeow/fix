@@ -1,3 +1,17 @@
+
+const { SlashCommandBuilder } = require("discord.js");
+
+module.exports = {
+  name: "ping", // for message commands
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
+  async execute(interactionOrMessage) {
+    if (interactionOrMessage.reply) {
+      await interactionOrMessage.reply("🏓 Pong!");
+    }
+  }
+};
 const { EmbedBuilder } = require("discord.js");
 
 module.exports = {
@@ -31,3 +45,4 @@ module.exports = {
     interaction.reply({ embeds: [embed] });
   }
 };
+
