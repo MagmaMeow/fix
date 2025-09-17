@@ -3,6 +3,20 @@ module.exports = {
   description: "Ban a user (Admin only)",
   slash: true,
   options: [{ name: "user", type: 6, description: "User to ban", required: true }],
+  const { SlashCommandBuilder } = require("discord.js");
+
+module.exports = {
+  name: "ping", // for message commands
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
+  async execute(interactionOrMessage) {
+    if (interactionOrMessage.reply) {
+      await interactionOrMessage.reply("🏓 Pong!");
+    }
+  }
+};
+
 
   async execute({ message, args }) {
     if (!message.member.permissions.has("BanMembers")) return message.reply("❌ No permission.");
@@ -21,3 +35,4 @@ module.exports = {
     interaction.reply(`🔨 Banned ${user.tag}`);
   }
 };
+
