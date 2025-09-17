@@ -4,11 +4,12 @@ const fs = require("fs");
 const path = require("path");
 const { REST, Routes } = require("discord.js");
 
-// Collect all slash commands from the commands folder
-const commands = [];
+// Path to your commands folder
 const commandsPath = path.join(__dirname, "commands");
 const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(".js"));
 
+// Collect slash command data
+const commands = [];
 for (const file of commandFiles) {
   const command = require(path.join(commandsPath, file));
   if (command.data && typeof command.data.toJSON === "function") {
