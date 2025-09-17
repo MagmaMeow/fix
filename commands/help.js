@@ -1,30 +1,26 @@
 const { SlashCommandBuilder } = require("discord.js");
 
 module.exports = {
-  name: "ping", // for message commands
-  data: new SlashCommandBuilder()
-    .setName("ping")
-    .setDescription("Replies with Pong!"),
-  async execute(interactionOrMessage) {
-    if (interactionOrMessage.reply) {
-      await interactionOrMessage.reply("🏓 Pong!");
-    }
-  }
-};
-
-module.exports = {
   name: "help",
   description: "List all commands",
-  slash: true,
+  data: new SlashCommandBuilder()
+    .setName("help")
+    .setDescription("List all available commands"),
 
-  async execute({ client, message }) {
-    const cmds = client.commands.map(c => `**${c.name}** - ${c.description}`).join("\n");
-    message.reply("📖 Commands:\n" + cmds);
-  },
+  async execute(ctx) {
+    // Get the commands list from the client
+    const cmds = ctx.client.commands.map(c => {
+      const desc = c.description || "No description";
+      return `**${c.name}** - ${desc}`;
+    }).join("\n");
 
-  async executeSlash({ client, interaction }) {
-    const cmds = client.commands.map(c => `**${c.name}** - ${c.description}`).join("\n");
-    interaction.reply("📖 Commands:\n" + cmds);
+    const helpMessage = "📖 **Commands:**\n" + cmds;
+
+    // Slash command
+    if (ctx.isChatInputCommand && ctx.isChatInputCommand()) {
+      return ctx.reply({ content: helpMessage, ephemeral: true });
+    }
+    // Message command
+    return ctx.reply(helpMessage);
   }
 };
-
