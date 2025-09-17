@@ -1,6 +1,8 @@
 // Load env vars
 require("dotenv").config();
-const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require("discord.js");
+const fs = require("fs");
+const path = require("path");
+const { Client, GatewayIntentBits, Partials, PermissionsBitField, Collection } = require("discord.js");
 const express = require("express");
 
 // ------------------ Express Server (for Render) ------------------
@@ -17,7 +19,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.Message]
 });
 
 const TOKEN = process.env.TOKEN;
@@ -27,6 +29,31 @@ const OWNER_ID = "1268229530351567032"; // your ID
 if (!TOKEN || !HUB_SERVER_ID) {
   console.error("❌ TOKEN or HUB_SERVER_ID not set in environment!");
   process.exit(1);
+}
+
+// ------------------ Command Collections ------------------
+client.commands = new Collection();
+client.slashCommands = new Collection();
+
+// Load message commands from ./commands
+const commandFiles = fs.readdirSync(path.join(__dirname, "commands")).filter(file => file.endsWith(".js"));
+for (const file of commandFiles) {
+  const command = require(`./commands/${file}`);
+  if (command.name) {
+    client.commands.set(command.name, command);
+    console.log(`📦 Loaded message command: ${command.name}`);
+  }
+}
+
+// Load slash commands from ./commands (if they export data & execute)
+const slashData = [];
+for (const file of commandFiles) {
+  const command = require(`./commands/${file}`);
+  if (command.data && command.execute) {
+    client.slashCommands.set(command.data.name, command);
+    slashData.push(command.data.toJSON());
+    console.log(`📦 Loaded slash command: ${command.data.name}`);
+  }
 }
 
 // ------------------ Hub Category Helper ------------------
@@ -51,7 +78,6 @@ async function ensureGuildCategory(hub, guild, removed = false) {
         parent: category.id
       });
 
-      // Starter messages
       if (sub === "ban") chan.send("🔨 Ban logs will appear here.");
       if (sub === "warn") chan.send("⚠️ Warn logs will appear here.");
       if (sub === "kick") chan.send("👢 Kick logs will appear here.");
@@ -70,12 +96,18 @@ async function updateOwnerInfo(hub, guild) {
   if (ownerChan) {
     try {
       const owner = await guild.fetchOwner();
-      // Clear previous messages for a clean single entry
-      const msgs = await ownerChan.messages.fetch({ limit: 10 });
-      if (msgs.size > 0) await ownerChan.bulkDelete(msgs, true);
-      ownerChan.send(`👑 Server Owner: **${owner.user.tag}** (\`${owner.id}\`)`);
+      const msgs = await ownerChan.messages.fetch({ limit: 25 }).catch(() => null);
+      if (msgs && msgs.size > 0) {
+        const young = msgs.filter(m => Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
+        if (young.size) await ownerChan.bulkDelete(young, true).catch(() => null);
+        const old = msgs.filter(m => !young.has(m.id));
+        for (const [, m] of old) {
+          await m.delete().catch(() => null);
+        }
+      }
+      await ownerChan.send(`👑 Server Owner: **${owner.user.tag}** (\`${owner.id}\`)`);
     } catch {
-      ownerChan.send(`⚠️ Could not fetch server owner for **${guild.name}**`);
+      await ownerChan.send(`⚠️ Could not fetch server owner for **${guild.name}**`);
     }
   }
 }
@@ -88,7 +120,7 @@ async function logToHub(guild, sub, msg, removed = false) {
   const channel = hub.channels.cache.find(
     (c) => c.parentId === category.id && c.name === sub
   );
-  if (channel) channel.send(msg);
+  if (channel) channel.send(msg).catch(() => null);
 }
 
 // ------------------ Events ------------------
@@ -101,7 +133,6 @@ client.once("ready", async () => {
     return;
   }
 
-  // Ensure skeleton + refresh owner info for all guilds
   for (const [, guild] of client.guilds.cache) {
     if (guild.id === HUB_SERVER_ID) continue;
     await ensureGuildCategory(hub, guild);
@@ -124,7 +155,7 @@ client.on("guildDelete", async (guild) => {
 
 // ------------------ Message Commands ------------------
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
+  if (!message.guild || message.author.bot) return;
 
   const prefix = message.content.startsWith("!")
     ? "!"
@@ -134,67 +165,31 @@ client.on("messageCreate", async (message) => {
   if (!prefix) return;
 
   const args = message.content.slice(prefix.length).trim().split(/ +/);
-  const command = args.shift().toLowerCase();
+  const commandName = args.shift()?.toLowerCase();
 
-  // ping
-  if (command === "ping") {
-    return message.reply("🏓 Pong!");
+  const command = client.commands.get(commandName);
+  if (!command) return;
+
+  try {
+    await command.execute(message, args, { logToHub, OWNER_ID });
+  } catch (error) {
+    console.error(error);
+    message.reply("❌ There was an error executing that command.");
   }
+});
 
-  // owner-only say
-  if (command === "say" && message.author.id === OWNER_ID) {
-    const text = args.join(" ");
-    if (!text) return message.reply("❌ Provide text to say!");
-    return message.channel.send(text);
-  }
+// ------------------ Slash Commands ------------------
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isChatInputCommand()) return;
 
-  // warn
-  if (command === "warn") {
-    const member = message.mentions.members.first();
-    if (!member) return message.reply("❌ Mention someone to warn.");
-    await logToHub(message.guild, "warn", `⚠️ ${member.user.tag} warned by ${message.author.tag}`);
-    return message.reply(`⚠️ Warned ${member.user.tag}`);
-  }
+  const command = client.slashCommands.get(interaction.commandName);
+  if (!command) return;
 
-  // kick
-  if (command === "kick") {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return;
-    const member = message.mentions.members.first();
-    if (!member) return message.reply("❌ Mention someone to kick.");
-    try {
-      await member.kick();
-      await logToHub(message.guild, "kick", `👢 ${member.user.tag} kicked by ${message.author.tag}`);
-      message.reply(`👢 Kicked ${member.user.tag}`);
-    } catch {
-      message.reply("❌ Failed to kick.");
-    }
-  }
-
-  // ban
-  if (command === "ban") {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
-    const member = message.mentions.members.first();
-    if (!member) return message.reply("❌ Mention someone to ban.");
-    try {
-      await member.ban({ reason: `Banned by ${message.author.tag}` });
-      await logToHub(message.guild, "ban", `🔨 ${member.user.tag} banned by ${message.author.tag}`);
-      message.reply(`🔨 Banned ${member.user.tag}`);
-    } catch {
-      message.reply("❌ Failed to ban.");
-    }
-  }
-
-  // clear
-  if (command === "clear") {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) return;
-    const amount = parseInt(args[0]) || 5;
-    const msgs = await message.channel.bulkDelete(amount, true);
-    await logToHub(
-      message.guild,
-      "clear",
-      `🧹 ${message.author.tag} cleared ${msgs.size} messages in #${message.channel.name}`
-    );
-    message.channel.send(`🧹 Cleared ${msgs.size} messages.`).then((m) => setTimeout(() => m.delete(), 3000));
+  try {
+    await command.execute(interaction, { logToHub, OWNER_ID });
+  } catch (error) {
+    console.error(error);
+    interaction.reply({ content: "❌ There was an error executing that command.", ephemeral: true });
   }
 });
 
