@@ -1,31 +1,29 @@
-require('dotenv').config();
-const { REST, Routes, SlashCommandBuilder } = require('discord.js');
+require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
+const { REST, Routes } = require("discord.js");
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName('ping')
-    .setDescription('Replies with Pong!'),
-  new SlashCommandBuilder()
-    .setName('say')
-    .setDescription('Bot repeats your message')
-    .addStringOption(option =>
-      option.setName('text')
-        .setDescription('The text to say')
-        .setRequired(true)
-    )
-].map(cmd => cmd.toJSON());
+const commands = [];
+const commandFiles = fs.readdirSync(path.join(__dirname, "commands")).filter(file => file.endsWith(".js"));
 
-const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+for (const file of commandFiles) {
+  const command = require(`./commands/${file}`);
+  if (command.data) {
+    commands.push(command.data.toJSON());
+  }
+}
+
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 (async () => {
   try {
-    console.log('🔄 Refreshing slash commands...');
+    console.log("🔄 Registering slash commands...");
     await rest.put(
-      Routes.applicationCommands(process.env.CLIENT_ID), // Your bot's application ID
+      Routes.applicationCommands(process.env.CLIENT_ID),
       { body: commands }
     );
-    console.log('✅ Slash commands registered.');
+    console.log("✅ Slash commands registered.");
   } catch (error) {
-    console.error(error);
+    console.error("❌ Failed to register slash commands:", error);
   }
 })();
