@@ -1,130 +1,170 @@
+// Load env vars
 require("dotenv").config();
-const fs = require("fs");
-const { Client, GatewayIntentBits, Collection } = require("discord.js");
-const { hubGuildId } = require("./config");
-const { addLog } = require("./utils/logger");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
+const express = require("express");
 
+// ------------------ Express Server (for Render) ------------------
+const app = express();
+app.get("/", (req, res) => res.send("Bot is running!"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
+
+// ------------------ Discord Client ------------------
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ],
+  partials: [Partials.Channel]
 });
 
-client.commands = new Collection();
+const TOKEN = process.env.TOKEN;
+const HUB_SERVER_ID = process.env.HUB_SERVER_ID;
+const OWNER_ID = "1268229530351567032"; // your ID
 
-// Load all commands
-fs.readdirSync("./commands").forEach((file) => {
-  const cmd = require(`./commands/${file}`);
-  client.commands.set(cmd.name, cmd);
-});
+if (!TOKEN || !HUB_SERVER_ID) {
+  console.error("❌ TOKEN or HUB_SERVER_ID not set in environment!");
+  process.exit(1);
+}
 
-// Setup hub category + channels
-async function setupHubCategory(guild) {
-  const hub = client.guilds.cache.get(hubGuildId);
-  if (!hub) return;
+// ------------------ Hub Category Helper ------------------
+async function ensureGuildCategory(hub, guild, removed = false) {
+  const catName = removed ? `(Removed) ${guild.name}` : guild.name;
 
   let category = hub.channels.cache.find(
-    (c) => c.type === 4 && c.name === guild.name
+    (c) => c.type === 4 && c.name === catName
   );
 
   if (!category) {
     category = await hub.channels.create({
-      name: guild.name,
-      type: 4,
+      name: catName,
+      type: 4
     });
 
-    const channels = ["owner", "ban", "warn", "kick", "clear", "everything-else"];
-    for (const ch of channels) {
+    const subs = ["owner", "ban", "warn", "kick", "clear", "everything-else"];
+    for (const sub of subs) {
       await hub.channels.create({
-        name: ch,
+        name: sub,
         type: 0,
-        parent: category.id,
+        parent: category.id
       });
     }
   }
   return category;
 }
 
-async function logAction(guild, type, message) {
-  addLog(type, guild.id, { text: message });
-
-  const hub = client.guilds.cache.get(hubGuildId);
+async function logToHub(guild, sub, msg, removed = false) {
+  const hub = client.guilds.cache.get(HUB_SERVER_ID);
   if (!hub) return;
 
-  const category = hub.channels.cache.find(
-    (c) => c.type === 4 && c.name === guild.name
+  const category = await ensureGuildCategory(hub, guild, removed);
+  const channel = hub.channels.cache.find(
+    (c) => c.parentId === category.id && c.name === sub
   );
-  if (!category) return;
-
-  const logChannel = hub.channels.cache.find(
-    (c) => c.parentId === category.id && c.name === type
-  ) || hub.channels.cache.find(
-    (c) => c.parentId === category.id && c.name === "everything-else"
-  );
-
-  if (logChannel) logChannel.send(message);
+  if (channel) channel.send(msg);
 }
 
-// Bot joins a guild
-client.on("guildCreate", async (guild) => {
-  await setupHubCategory(guild);
-  await logAction(guild, "everything-else", `✅ Joined guild: **${guild.name}** (\`${guild.id}\`)`);
-});
+// ------------------ Events ------------------
+client.once("ready", async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
-// Bot leaves a guild
-client.on("guildDelete", async (guild) => {
-  const hub = client.guilds.cache.get(hubGuildId);
-  if (!hub) return;
-
-  const category = hub.channels.cache.find(
-    (c) => c.type === 4 && c.name === guild.name
-  );
-  if (category) {
-    await category.setName(`(Removed)${guild.name}`);
-    const logChannel = hub.channels.cache.find(
-      (c) => c.parentId === category.id && c.name === "everything-else"
-    );
-    if (logChannel) {
-      logChannel.send(`❌ Bot removed from **${guild.name}** (\`${guild.id}\`)`);
-    }
+  const hub = client.guilds.cache.get(HUB_SERVER_ID);
+  if (!hub) {
+    console.error("⚠️ Hub server not found! Did you invite the bot?");
+    return;
   }
 
-  addLog("leave", guild.id, { name: guild.name });
+  for (const [, guild] of client.guilds.cache) {
+    if (guild.id === HUB_SERVER_ID) continue;
+    await ensureGuildCategory(hub, guild);
+  }
 });
 
-// Message commands
-client.on("messageCreate", async (msg) => {
-  if (msg.author.bot) return;
-  const prefix = msg.content.startsWith("?") ? "?" : msg.content.startsWith("!") ? "!" : null;
+client.on("guildCreate", async (guild) => {
+  await logToHub(guild, "everything-else", `✅ Joined guild: **${guild.name}** (\`${guild.id}\`)`);
+});
+
+client.on("guildDelete", async (guild) => {
+  await logToHub(guild, "everything-else", `❌ Left guild: **${guild.name}** (\`${guild.id}\`)`, true);
+});
+
+// ------------------ Message Commands ------------------
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+
+  const prefix = message.content.startsWith("!")
+    ? "!"
+    : message.content.startsWith("?")
+    ? "?"
+    : null;
   if (!prefix) return;
 
-  const args = msg.content.slice(prefix.length).trim().split(/ +/);
-  const commandName = args.shift().toLowerCase();
+  const args = message.content.slice(prefix.length).trim().split(/ +/);
+  const command = args.shift().toLowerCase();
 
-  const command = client.commands.get(commandName);
-  if (!command) return;
+  // ping
+  if (command === "ping") {
+    return message.reply("🏓 Pong!");
+  }
 
-  try {
-    const result = await command.execute(client, msg, args);
+  // owner-only say
+  if (command === "say" && message.author.id === OWNER_ID) {
+    const text = args.join(" ");
+    if (!text) return message.reply("❌ Provide text to say!");
+    return message.channel.send(text);
+  }
 
-    // If command returns { type, text }, log it
-    if (result && result.type && result.text) {
-      await logAction(msg.guild, result.type, result.text);
+  // warn
+  if (command === "warn") {
+    const member = message.mentions.members.first();
+    if (!member) return message.reply("❌ Mention someone to warn.");
+    await logToHub(message.guild, "warn", `⚠️ ${member.user.tag} warned by ${message.author.tag}`);
+    return message.reply(`⚠️ Warned ${member.user.tag}`);
+  }
+
+  // kick
+  if (command === "kick") {
+    if (!message.member.permissions.has("KickMembers")) return;
+    const member = message.mentions.members.first();
+    if (!member) return message.reply("❌ Mention someone to kick.");
+    try {
+      await member.kick();
+      await logToHub(message.guild, "kick", `👢 ${member.user.tag} kicked by ${message.author.tag}`);
+      message.reply(`👢 Kicked ${member.user.tag}`);
+    } catch {
+      message.reply("❌ Failed to kick.");
     }
-  } catch (err) {
-    console.error(err);
-    msg.reply("❌ Error running command.");
+  }
+
+  // ban
+  if (command === "ban") {
+    if (!message.member.permissions.has("BanMembers")) return;
+    const member = message.mentions.members.first();
+    if (!member) return message.reply("❌ Mention someone to ban.");
+    try {
+      await member.ban({ reason: `Banned by ${message.author.tag}` });
+      await logToHub(message.guild, "ban", `🔨 ${member.user.tag} banned by ${message.author.tag}`);
+      message.reply(`🔨 Banned ${member.user.tag}`);
+    } catch {
+      message.reply("❌ Failed to ban.");
+    }
+  }
+
+  // clear
+  if (command === "clear") {
+    if (!message.member.permissions.has("ManageMessages")) return;
+    const amount = parseInt(args[0]) || 5;
+    const msgs = await message.channel.bulkDelete(amount, true);
+    await logToHub(
+      message.guild,
+      "clear",
+      `🧹 ${message.author.tag} cleared ${msgs.size} messages in #${message.channel.name}`
+    );
+    message.channel.send(`🧹 Cleared ${msgs.size} messages.`).then((m) => setTimeout(() => m.delete(), 3000));
   }
 });
 
-// Ready
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-  client.guilds.cache.forEach((guild) => setupHubCategory(guild));
-});
-
-client.login(process.env.TOKEN);
+// ------------------ Login ------------------
+client.login(TOKEN);
